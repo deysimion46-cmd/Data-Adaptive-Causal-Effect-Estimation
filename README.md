@@ -67,8 +67,7 @@ Example_code.R provides an example code for implementing our method.
 
 Real Data Analysis.R produces Figure 6, Figure 7 and Table 2.
 
-We have developed a new package "forestBalance" available in R, which we have applied in our
-new paper. 
+We have developed a new package "forestBalance" available in R, which we have applied in the newer version of the paper, that is yet to be published. You can find the tutorials at jaredhuling.org/forestBalance/articles. 
 
 
 
@@ -78,6 +77,8 @@ Simulation_old_crossfitting.R  and newresult.R creates new results and plots...
 
 
 new_real_data_analysis.R creates loveplot and real similar data analysis. 
+
+time_completxity.R shows scalability and time complexity for the implementation of the crossfitting. 
 
 
 
