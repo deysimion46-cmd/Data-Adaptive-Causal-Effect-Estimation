@@ -1,0 +1,757 @@
+---
+title: "Comparison of Balance"
+author: "SIMION DE"
+date: "16/10/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+energy_balance <- function(x,         ## matrix of covariates for all RCT and non-RCT patients
+                           trt,       ## vector of treatment indicators (either 0 for control or 1 for treated)
+                           standardize_x = FALSE, ## standardize the covariates?
+                           verbose = FALSE,       ## print out text about quadratic programming algorithm convergence?
+                           sigma = 0.5,           ## sigma for gaussian kernel. only used if type = "gaussian_kernel"
+                           K_custom = NULL,       ## an n x n kernel matrix (n=nrow(x)). only used if type = "custom"
+                           solver = c("osqp", "cccp"), ## which quadratic programming software to use? osqp is fastest
+                           type = c("energy",
+                                    "gaussian_kernel",
+                                    "custom")) ## what kernel/distance to use?
+{
+  if (standardize_x)
+  {
+    x <- scale(x)
+  }
+  
+  ## dimension of covariates
+  p <- NCOL(x)
+  
+  
+  type    <- match.arg(type)
+  solver  <- match.arg(solver)
+  
+  if (type == "custom")
+  {
+    if (is.null(K_custom))
+    {
+      stop("if type set to custom, must specify custom kernel matrix!")
+    }
+    dist_x <- median_dist <- NULL
+  } else
+  {
+    ## create euclidean distance matrix
+    dist_x  <- as.matrix(dist(x))
+    
+    median_dist <- median(dist_x)
+  }
+  
+
+  
+  
+  ## we will optimize weighted energy distance
+  ## by minimizing f(w) = w'Qw + a'w subject to constraints on w.
+  ## constraints are that w >= 0 and Aw = b, where b is a vector
+  
+  ## the following code constructs the Q matrix and 'a' vector
+  ## corresponding to the weighted energy distance.
+  
+  ## if the treatment is not randomized, we will
+  ## balance the treatment arm and the control arm separately
+  ## to the target population (instead of the combined trt+control sample).
+  ## this makes Q and 'a' slightly different.
+  
+  
+  N <- nrow(x)
+  
+  if (grepl("gaussian_kernel", type))
+  {
+    Q_x   <- -exp(-sigma * dist_x ^ 2 / median_dist ^ 2)
+  } else if (type == "energy")
+  {
+    Q_x   <- dist_x
+  } else if (type == "custom")
+  {
+    Q_x <- -K_custom
+  }
+  
+  
+  Q_mat <- -trt * t( trt * t(Q_x)) / sum(trt == 1) ^ 2 -
+    (1 - trt) * t( (1 - trt) * t(Q_x)) / sum(trt != 1) ^ 2
+  
+  aa <- 2 * as.vector(rowSums(trt * Q_x)) / (sum(trt == 1) * N) +
+    2 * as.vector(rowSums((1-trt) * Q_x)) / (sum(trt != 1) * N)
+  
+  
+  #evals <- eigen(Q_mat)$values
+  
+  ## only add nugget if we plan to use the solve.QP() function
+  # if (min(evals) < 0 & (grepl("gaussian_kernel", type) | grepl("gaussian_anova_kernel", type)))
+  # {
+  #   nugget <- -min(evals) + 1e-10
+  # } else
+  # {
+  #   nugget <- 0
+  # }
+  
+  nugget <- 0
+  
+  ## add the smallest value to diagonal such that
+  ## the Q matrix is positive definite
+  Q_mat <- Q_mat + (nugget) * diag(nrow(Q_mat))
+  
+  
+  ## set up constraints on weights
+  AA1           <- matrix(0, ncol = N, nrow = 1)
+  AA0           <- matrix(0, ncol = N, nrow = 1)
+  
+  AA1[,trt == 1] <- 1
+  AA0[,trt != 1] <- 1
+  
+  
+  A           <- rbind(AA1, AA0)
+  rownames(A) <- paste0("eq", 1:nrow(A))
+  sum.constr   <- c(sum(trt == 1), sum(trt != 1))
+  
+  
+  ## A*w = sum.constr forces the weights
+  ## to sum to the sample size of each treatment group.
+  ## ie w_i : trt_i = 1 will sum to the number of trt == 1
+  
+  
+  if (solver == "osqp")
+  {
+    ## minimizing f(w) = 0.5*w'Qw - a'w
+    
+    ## we will set up the quadratic program to be solved by
+    ## the solve.QP function accessed from quadprog. this solver
+    ## is very fast but cannot handle negative definite Q_mat
+    
+    
+    ## set up the linear (in)equality constraints. The first 1 or 2
+    ## constraints are the equality constraints. the remaining are the
+    ## inequality constraints (ie making sure all weights are positive)
+    
+    #Amat <- t( rbind(A, diag(nrow(Q_mat)), -diag(nrow(Q_mat)) ) )
+    
+    Amat <- rbind(diag(N), AA1, AA0)
+    
+    lvec <- c(rep(0, N), sum.constr)
+    uvec <- c(rep(Inf, N), sum.constr)
+    
+    ## Amat * w (>)= bvec
+    #bvec <- c(sum.constr, rep(1e-14, nrow(Q_mat)), rep(-10*(nrow(Q_mat) ^ (1/3)), nrow(Q_mat)))
+    
+    #res <- solve.QP(Dmat = Q_mat, dvec = -aa/2, Amat = Amat,
+    #                bvec = bvec, meq = length(sum.constr))
+    
+
+    opt.out <- osqp::solve_osqp(Q_mat,
+                                q = aa/2,
+                                A = Amat, l = lvec, u = uvec,
+                                pars = osqp::osqpSettings(max_iter = 2e5,
+                                                          eps_abs = 1e-8,
+                                                          eps_rel = 1e-8,
+                                                          verbose = FALSE))
+    
+    # if (!identical(opt.out$info$status, "maximum iterations reached") & !(any(opt.out$x > 1e5)))
+    # {
+    #   break
+    # }
+    
+    energy_wts <- unname(opt.out$x)
+    energy_wts[energy_wts < 0] <- 0 #due to numerical imprecision
+    
+  } else
+  {
+    ## minimizing f(w) = w'Qw + a'w
+    
+    ## we will set up the quadratic program to be solved by
+    ## the cccp function accessed from optiSolve. this solver
+    ## can handle when Q_mat is negative definite very well!
+    
+    rownames(Q_mat) <- paste(1:NROW(Q_mat))
+    
+    qf <- quadfun(Q = Q_mat, a = aa, id = rownames(Q_mat)) #quadratic obj.
+    
+    lb <- lbcon(0.0, id = rownames(Q_mat)) #lower bound
+    
+    ub <- ubcon(10*(nrow(Q_mat) ^ (1/3)), id = rownames(Q_mat)) #upper bound. not really needed
+    
+    ## sup up linear constraints
+    lc <- lincon(A   = A,
+                 dir = rep("==", length(sum.constr)),
+                 val = sum.constr,
+                 id  = rownames(Q_mat)) #linear constraint
+    
+    ## set up the QP
+    lcqp <- cop( f = qf, lb = lb, ub = ub, lc = lc )
+    
+    opt.out <- solvecop(lcqp, solver = "cccp", quiet = !verbose)
+    
+    energy_wts <- unname(opt.out$x)
+    
+    lagrangian <- NULL
+    
+  }
+  
+  energy_wts[energy_wts < 0] <- 0
+  
+  list(weights = energy_wts, opt = opt.out)
+}
+
+
+## this function inputs a fitted random forest
+## and outputs predicted leaf node membership 
+## for each observation for each tree in the forest:
+##
+## get predicted leaf node membership for every observation for every tree
+## in the random forest. each row is an observation, each column is a tree
+forest_2_leaf_node_matrix <- function(forest_object, newdata)
+{
+  ## check if object is from the grf package or ranger
+  if (inherits(forest_object, "grf")) ## grf case
+  {
+    
+    ## this is *really* slow, but I don't know
+    ## a better way yet
+    ntree <- forest_object[["_num_trees"]]
+    nodes_by_trees <- matrix(NA, nrow = NROW(newdata), ncol = ntree)
+    
+    for (tr in 1:ntree)
+    {
+      nodes_by_trees[,tr] <- get_leaf_node(get_tree(forest_object, tr), newdata = newdata)
+    }
+    
+  } else if (inherits(forest_object, "ranger")) ## ranger case
+  {
+    ## get predicted leaf node membership for every observation for every tree
+    ## in the random forest.
+    ## each row is an observation, each column is a tree
+    nodes_by_trees <- predict(forest_object, type = "terminalNodes", data = newdata)$predictions
+  }
+  
+  nodes_by_trees
+}
+
+## this function inputs the leaf node membership matrix
+## and outputs the random forest kernel matrix
+leaf_nodes_2_kernel <- function(nodes_by_trees)
+{
+  
+  n <- nrow(nodes_by_trees)
+  
+  ## create nxn kernel matrix where the (i,j)th entry
+  ## is the kernel similarity between observation i and j.
+  ## similarity is the proportion of trees in which
+  ## i and j are in the same leaf node
+  K_mat <- matrix(0, nrow = n, ncol = n)
+  diag(K_mat) <- 1
+  
+  for (i in 1:(n-1))
+  {
+    for (j in (i+1):n)
+    {
+      K_mat[i,j] <- K_mat[j,i] <- mean(nodes_by_trees[i,] == nodes_by_trees[j,])
+    }
+  }
+  
+  K_mat
+}
+
+## inputs random forest object
+## and outputs kernel matrix
+forest_2_kernel_matrix <- function(forest_object, newdata)
+{
+  ## create leaf node matrix
+  leaf_node_mat <- forest_2_leaf_node_matrix(forest_object, newdata)
+  
+  ## return kernel matrix
+  leaf_nodes_2_kernel(leaf_node_mat)
+}
+
+## random forests with ranger
+#as.matrix(dist(x))
+
+## random forests with grf (generalized random forests)
+library(grf)
+library(ranger)
+## for other weighting methods
+library(WeightIt)
+
+library(fields)
+
+## needed for energy_balance only if solver="cccp"
+#library(optiSolve)
+
+## for checking balance
+library(cobalt)
+library(osqp)
+library(ggplot2)
+
+
+```
+
+
+```{r}
+
+
+set.seed(12345)
+n=500
+p=50
+rho <- -0.25
+Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
+
+x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
+aprob=1/(1+exp(-(x[,1]>0.5)))
+a <- rbinom(n, 1, aprob)
+y <- .5 * (x[,1]>0.5)+.5*(x[,2]>.5)
+
+
+
+
+dfxa  <- data.frame(a = a, x = x)
+dfxay <- data.frame(a = a, x = x, y = y)
+dfx=data.frame(x=x)
+
+
+
+```
+
+
+
+
+```{r}
+
+grf_fit_multi <- multi_regression_forest(x, Y = scale(cbind(a, y)),  num.trees = 1000,
+                                         min.node.size = 10)
+
+
+
+A=seq(-1,1,length=31)
+matrix=expand.grid(A,A)
+A=matrix(0,nrow=961,ncol=50)
+A[,1]=matrix[,1]
+A[,2]=matrix[,2]
+newdata=data.frame(A)
+colnames(newdata)=colnames(dfx)
+
+
+k=forest_2_kernel_matrix(grf_fit_multi, newdata = newdata)
+
+# 481, x1=0, x2=0
+
+kernel=numeric(961)
+
+for(i in 1:961){
+  
+  kernel[i]=k[i,481]
+}
+
+
+dataset=data.frame(x1=matrix[,1],x2=matrix[,2],kernel=kernel)
+#dataset$override <- ifelse(df$x1 == 0 & df$x2 == 0, "red", NA)
+
+#ggplot(dataset, aes(x1, x2)) +
+# Draw the heatmap
+#geom_tile(aes(fill = kernel), color = "white") +
+#scale_fill_gradient(low = "white", high = "blue") +
+
+g1 <- ggplot(dataset, aes(x1, x2, fill = kernel)) +
+  geom_tile() +
+  geom_point(aes(x = 0, y = 0), color = "red", size = 3) +
+  geom_vline(xintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +
+  geom_hline(yintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +
+  theme_minimal()
+
+
+
+
+#865 x1=.8,x2=.8
+
+
+for(i in 1:961){
+  
+  kernel[i]=k[i,865]
+}
+
+
+dataset=data.frame(x1=matrix[,1],x2=matrix[,2],kernel=kernel)
+
+
+
+
+
+g2=ggplot(dataset, aes(x1, x2, fill = kernel)) +
+  geom_tile()+
+  geom_point(aes(x = .8, y = .8), color = "red", size = 3)+
+  geom_vline(xintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +
+  geom_hline(yintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +theme_minimal()
+
+
+#857 X1=0, X2=.8
+
+for(i in 1:961){
+  
+  kernel[i]=k[i,857]
+}
+dataset=data.frame(x1=matrix[,1],x2=matrix[,2],kernel=kernel)
+
+
+g3=ggplot(dataset, aes(x1, x2, fill = kernel)) +
+  geom_tile()+
+  geom_point(aes(x = 0, y = .8), color = "red", size = 3)+
+  geom_vline(xintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +
+  geom_hline(yintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +theme_minimal()
+
+
+
+
+
+# 493, x1=.8, x2=0 
+
+
+for(i in 1:961){
+  
+  kernel[i]=k[i,493]
+}
+dataset=data.frame(x1=matrix[,1],x2=matrix[,2],kernel=kernel)
+
+
+g4= ggplot(dataset, aes(x1, x2, fill = kernel)) +
+  geom_tile()+
+  geom_point(aes(x = .8, y = 0), color = "red", size = 3)+
+  geom_vline(xintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +
+  geom_hline(yintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +theme_minimal()
+
+
+
+                                        
+   kern_mat_grf_multi <- forest_2_kernel_matrix(grf_fit_multi, newdata = x)                             
+                                         
+                                         
+   ebw_grf_multi <- energy_balance(x, a, K_custom = kern_mat_grf_multi, solver = "osqp", type = "custom")                                     
+
+w_grf_multi=ebw_grf_multi$weights
+
+fit=forest_balance(x,a,y,cross.fitting = T)
+w_cf=fit$weights
+
+
+ebw_gaussian=energy_balance(x, a, solver = "osqp", type = "gaussian_kernel")
+
+w_gaussiankernel=ebw_gaussian$weights
+
+formula_a <- as.formula(paste0("a ~ ", paste(colnames(dfxa)[-1], collapse = " + ")))
+rf_fit_a <- ranger(formula_a, data = dfxa,
+                   num.trees = 1000)
+prop=rf_fit_a$predictions
+prop[a==0]=1-prop[a==0]
+invprop=1/prop
+
+
+Func=.5 * (x[,1]>0.5)+.5*(x[,2]>.5)
+Func1= (x[,1]>0.5)
+
+
+```
+
+
+
+
+```{r}
+
+#gaussian
+library(tibble)
+
+A=seq(-1,1,length=31)
+matrix=expand.grid(A,A)
+A=matrix(0,nrow=961,ncol=50)
+A[,1]=matrix[,1]
+A[,2]=matrix[,2]
+newdata=data.frame(A)
+colnames(newdata)=colnames(dfx)
+
+x <- scale(newdata)
+
+sigma=.05
+
+
+dist_x  <- as.matrix(dist(x))
+
+
+median_dist <- median(dist_x)
+
+ Q_x   <- exp(-sigma * dist_x ^ 2 / median_dist ^ 2)
+ 
+ k=Q_x
+  
+ 
+ 
+# 481, x1=0, x2=0
+
+kernel=numeric(961)
+
+for(i in 1:961){
+  
+  kernel[i]=k[i,481]
+}
+
+
+dataset=data.frame(x1=matrix[,1],x2=matrix[,2],kernel=kernel)
+#dataset$override <- ifelse(df$x1 == 0 & df$x2 == 0, "red", NA)
+
+#ggplot(dataset, aes(x1, x2)) +
+# Draw the heatmap
+#geom_tile(aes(fill = kernel), color = "white") +
+#scale_fill_gradient(low = "white", high = "blue") +
+
+g1 <- ggplot(dataset, aes(x1, x2, fill = kernel)) +
+  geom_tile() +
+  geom_point(aes(x = 0, y = 0), color = "red", size = 3) +
+  geom_vline(xintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +
+  geom_hline(yintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +
+  theme_minimal()
+
+
+
+
+#865 x1=.8,x2=.8
+
+
+for(i in 1:961){
+  
+  kernel[i]=k[i,865]
+}
+
+
+dataset=data.frame(x1=matrix[,1],x2=matrix[,2],kernel=kernel)
+
+
+
+
+
+g2=ggplot(dataset, aes(x1, x2, fill = kernel)) +
+  geom_tile()+
+  geom_point(aes(x = .8, y = .8), color = "red", size = 3)+
+  geom_vline(xintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +
+  geom_hline(yintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +theme_minimal()
+
+
+#857 X1=0, X2=.8
+
+for(i in 1:961){
+  
+  kernel[i]=k[i,857]
+}
+dataset=data.frame(x1=matrix[,1],x2=matrix[,2],kernel=kernel)
+
+
+g3=ggplot(dataset, aes(x1, x2, fill = kernel)) +
+  geom_tile()+
+  geom_point(aes(x = 0, y = .8), color = "red", size = 3)+
+  geom_vline(xintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +
+  geom_hline(yintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +theme_minimal()
+
+
+
+
+
+# 493, x1=.8, x2=0 
+
+
+for(i in 1:961){
+  
+  kernel[i]=k[i,493]
+}
+dataset=data.frame(x1=matrix[,1],x2=matrix[,2],kernel=kernel)
+
+
+g4= ggplot(dataset, aes(x1, x2, fill = kernel)) +
+  geom_tile()+
+  geom_point(aes(x = .8, y = 0), color = "red", size = 3)+
+  geom_vline(xintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +
+  geom_hline(yintercept = 0.5, color = "red", linewidth = 0.8, linetype = "dashed") +theme_minimal()
+
+
+
+
+treatmemt_mean_CF=weighted.mean(Func[a==1],w=w_cf[a==1])#0.317
+control_mean_CF=weighted.mean(Func[a==0],w=w_cf[a==0])#0.323
+pop_mean_CF=mean(Func)
+
+treatment_mean_Gaussian=weighted.mean(Func[a==1],w=w_gaussiankernel[a==1])
+control_mean_Gaussian=weighted.mean(Func[a==0],w=w_gaussiankernel[a==0])
+pop_mean_Gaussian=mean(Func)
+  
+#RFkernel
+  treatment_mean_rfkernel=weighted.mean(Func[a==1],w=w_grf_multi[a==1])
+  control_mean_rfkernel=weighted.mean(Func[a==0],w=w_grf_multi[a==0])
+  pop_mean_rfkernel=mean(Func)
+  
+#RFinvprop
+  treatment_mean_rfinvprop=weighted.mean(Func[a==1],w=invprop[a==1])
+  control_mean_rfinvprop=weighted.mean(Func[a==0],w=invprop[a==0])
+  pop_mean_rfinvprop=mean(Func)
+  balance=tibble(process=c("Gaussian","Inv_prop","Our_method","CF_RF_MMD"),
+               Popmean=c(pop_mean_Gaussian,pop_mean_rfinvprop,pop_mean_rfkernel,pop_mean_CF),
+               Treatmentmean=c(treatment_mean_Gaussian,treatment_mean_rfinvprop,treatment_mean_rfkernel,treatmemt_mean_CF),
+               Controlmean=c(control_mean_Gaussian,control_mean_rfinvprop,control_mean_rfkernel,control_mean_CF))
+
+#Propensity score
+  
+  
+  #gaussian
+
+treatment_mean_Gaussian=weighted.mean(Func1[a==1],w=w_gaussiankernel[a==1])
+control_mean_Gaussian=weighted.mean(Func1[a==0],w=w_gaussiankernel[a==0])
+pop_mean_Gaussian=mean(Func1)
+  
+#RFkernel
+  treatment_mean_rfkernel=weighted.mean(Func1[a==1],w=w_grf_multi[a==1])
+  control_mean_rfkernel=weighted.mean(Func1[a==0],w=w_grf_multi[a==0])
+  pop_mean_rfkernel=mean(Func1)
+  
+#RFinvprop
+  treatment_mean_rfinvprop=weighted.mean(Func1[a==1],w=invprop[a==1])
+  control_mean_rfinvprop=weighted.mean(Func1[a==0],w=invprop[a==0])
+  pop_mean_rfinvprop=mean(Func1)
+  
+  
+balance_prop=tibble(process=c("Gaussian","Inv_prop","Our_method",),
+               Popmean=c(pop_mean_Gaussian,pop_mean_rfinvprop,pop_mean_rfkernel),
+               Treatmentmean=c(treatment_mean_Gaussian,treatment_mean_rfinvprop,treatment_mean_rfkernel),
+               Controlmean=c(control_mean_Gaussian,control_mean_rfinvprop,control_mean_rfkernel))
+```
+
+
+
+
+```{r}
+library(tibble)
+
+
+balance
+balance_prop
+```
+
+
+```{r}
+
+
+set.seed(12345)
+n=500
+p=200
+rho <- -0.25
+Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
+
+x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
+aprob=1/(1+exp(-(x[,1]>0.5)))
+a <- rbinom(n, 1, aprob)
+y <- .5 * (x[,1]>0.5)+.5*(x[,2]>.5)+rnorm(n, sd = sqrt(2))
+
+
+
+
+dfxa  <- data.frame(a = a, x = x)
+dfxay <- data.frame(a = a, x = x, y = y)
+
+
+
+
+grf_fit_multi <- multi_regression_forest(x, Y = scale(cbind(a, y)),  num.trees = 1000,
+                                         min.node.size = 10)
+                                        
+   kern_mat_grf_multi <- forest_2_kernel_matrix(grf_fit_multi, newdata = x)                             
+                                         
+                                         
+   ebw_grf_multi <- energy_balance(x, a, K_custom = kern_mat_grf_multi, solver = "osqp", type = "custom")                                     
+
+   
+   fit=forest_balance(x,a,y)
+   w_cf=fit$weights
+
+w_grf_multi=ebw_grf_multi$weights
+
+ebw_gaussian=energy_balance(x, a, solver = "osqp", type = "gaussian_kernel")
+
+w_gaussiankernel=ebw_gaussian$weights
+
+formula_a <- as.formula(paste0("a ~ ", paste(colnames(dfxa)[-1], collapse = " + ")))
+rf_fit_a <- ranger(formula_a, data = dfxa,
+                   num.trees = 1000)
+prop=rf_fit_a$predictions
+prop[a==0]=1-prop[a==0]
+invprop=1/prop
+
+
+Func=.5 * (x[,1]>0.5)+.5*(x[,2]>.5)
+Func1= (x[,1]>0.5)
+
+
+treatmemt_mean_CF=weighted.mean(Func[a==1],w=w_cf[a==1])#0.318
+control_mean_CF=weighted.mean(Func[a==0],w=w_cf[a==0])#0.243
+
+
+
+#gaussian
+
+treatment_mean_Gaussian=weighted.mean(Func[a==1],w=w_gaussiankernel[a==1])
+control_mean_Gaussian=weighted.mean(Func[a==0],w=w_gaussiankernel[a==0])
+pop_mean_Gaussian=mean(Func)
+  
+#RFkernel
+  treatment_mean_rfkernel=weighted.mean(Func[a==1],w=w_grf_multi[a==1])
+  control_mean_rfkernel=weighted.mean(Func[a==0],w=w_grf_multi[a==0])
+  pop_mean_rfkernel=mean(Func)
+  
+#RFinvprop
+  treatment_mean_rfinvprop=weighted.mean(Func[a==1],w=invprop[a==1])
+  control_mean_rfinvprop=weighted.mean(Func[a==0],w=invprop[a==0])
+  pop_mean_rfinvprop=mean(Func)
+balance=tibble(process=c("Gaussian","Inv_prop","Our_method"),
+               Popmean=c(pop_mean_Gaussian,pop_mean_rfinvprop,pop_mean_rfkernel),
+               Treatmentmean=c(treatment_mean_Gaussian,treatment_mean_rfinvprop,treatment_mean_rfkernel),
+               Controlmean=c(control_mean_Gaussian,control_mean_rfinvprop,control_mean_rfkernel))
+
+
+#propensity score balance
+treatmemt_mean_CF=weighted.mean(Func1[a==1],w=w_cf[a==1])#0.319
+control_mean_CF=weighted.mean(Func1[a==0],w=w_cf[a==0])#0.323
+
+treatment_mean_Gaussian=weighted.mean(Func1[a==1],w=w_gaussiankernel[a==1])
+control_mean_Gaussian=weighted.mean(Func1[a==0],w=w_gaussiankernel[a==0])
+pop_mean_Gaussian=mean(Func1)
+  
+#RFkernel
+  treatment_mean_rfkernel=weighted.mean(Func1[a==1],w=w_grf_multi[a==1])
+  control_mean_rfkernel=weighted.mean(Func1[a==0],w=w_grf_multi[a==0])
+  pop_mean_rfkernel=mean(Func1)
+  
+#RFinvprop
+  treatment_mean_rfinvprop=weighted.mean(Func1[a==1],w=invprop[a==1])
+  control_mean_rfinvprop=weighted.mean(Func1[a==0],w=invprop[a==0])
+  pop_mean_rfinvprop=mean(Func1)
+  
+  
+balance_prop=tibble(process=c("Gaussian","Inv_prop","Our_method"),
+               Popmean=c(pop_mean_Gaussian,pop_mean_rfinvprop,pop_mean_rfkernel),
+               Treatmentmean=c(treatment_mean_Gaussian,treatment_mean_rfinvprop,treatment_mean_rfkernel),
+               Controlmean=c(control_mean_Gaussian,control_mean_rfinvprop,control_mean_rfkernel))
+
+```
+
+
+```{r}
+
+
+
+balance
+balance_prop
+
+
+```
+
