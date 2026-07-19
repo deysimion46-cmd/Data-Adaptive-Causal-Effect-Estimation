@@ -1563,6 +1563,181 @@ for (r in 1:nreps)
 }
 write.table(res_mat46,"resmat46",row.names = F,quote = F,col.names = TRUE)
 
+
+
+resmat2_f31=numeric(50)
+resmat2_f41=numeric(50)
+n=1000
+p=10
+set.seed(12345)
+for( i in 1:50){
+  rho <- -0.25
+  Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
+  
+  x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
+  
+  ## scramble columns of x so that which pairs of columns
+  ## are correlated is at random
+  x <- x[,sample.int(p, p, replace = FALSE)]
+  
+  ## true propensity scores..
+  ## have to make sure the probabilities are not too close to 0 or 1 or else positivity will not hold!
+  aprob <- .25*(1+dbeta(x[,1],2,4))
+  
+  ## generate treatment assignments
+  a <- rbinom(n, 1, aprob)
+  
+  ## generate response with confounding.
+  ## here the true ATE (treatment effect) is 0
+  
+  y <- 2*(x[,1]-1)+.5*(2*a-1)*(1+1/(1+exp(-20*(x[,1]-1/3))))*(1+1/(1+exp(-20*(x[,2]-1/3))))+rnorm(n)
+  fit=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 3)
+  resmat2_f31[i]=fit$ate
+  fit1=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 4)
+  resmat2_f41[i]=fit1$ate
+}
+
+
+resmat2_f32=numeric(50)
+resmat2_f42=numeric(50)
+n=1000
+p=100
+set.seed(12345)
+for( i in 1:50){
+  rho <- -0.25
+  Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
+  
+  x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
+  
+  ## scramble columns of x so that which pairs of columns
+  ## are correlated is at random
+  x <- x[,sample.int(p, p, replace = FALSE)]
+  
+  ## true propensity scores..
+  ## have to make sure the probabilities are not too close to 0 or 1 or else positivity will not hold!
+  aprob <- .25*(1+dbeta(x[,1],2,4))
+  
+  ## generate treatment assignments
+  a <- rbinom(n, 1, aprob)
+  
+  ## generate response with confounding.
+  ## here the true ATE (treatment effect) is 0
+  
+  y <- 2*(x[,1]-1)+.5*(2*a-1)*(1+1/(1+exp(-20*(x[,1]-1/3))))*(1+1/(1+exp(-20*(x[,2]-1/3))))+rnorm(n)
+  fit=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 3)
+  resmat2_f32[i]=fit$ate
+  fit1=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 4)
+  resmat2_f42[i]=fit1$ate
+}
+
+
+resmat2_f36=numeric(50)
+resmat2_f46=numeric(50)
+n=4000
+p=100
+set.seed(12345)
+for( i in 1:50){
+  rho <- -0.25
+  Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
+  
+  x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
+  
+  ## scramble columns of x so that which pairs of columns
+  ## are correlated is at random
+  x <- x[,sample.int(p, p, replace = FALSE)]
+  
+  ## true propensity scores..
+  ## have to make sure the probabilities are not too close to 0 or 1 or else positivity will not hold!
+  aprob <- .25*(1+dbeta(x[,1],2,4))
+  
+  ## generate treatment assignments
+  a <- rbinom(n, 1, aprob)
+  
+  ## generate response with confounding.
+  ## here the true ATE (treatment effect) is 0
+  
+  y <- 2*(x[,1]-1)+.5*(2*a-1)*(1+1/(1+exp(-20*(x[,1]-1/3))))*(1+1/(1+exp(-20*(x[,2]-1/3))))+rnorm(n)
+  fit=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 3)
+  resmat2_f36[i]=fit$ate
+  fit1=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 4)
+  resmat2_f46[i]=fit1$ate
+}
+
+
+
+
+resmat3_f36=numeric(50)
+resmat3_f46=numeric(50)
+n=4000
+p=100
+set.seed(12345)
+for( i in 1:50){
+  rho <- -0.25
+  Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
+  
+  x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
+  
+  ## scramble columns of x so that which pairs of columns
+  ## are correlated is at random
+  x <- x[,sample.int(p, p, replace = FALSE)]
+  
+  ## true propensity scores..
+  ## have to make sure the probabilities are not too close to 0 or 1 or else positivity will not hold!
+  aprob <- 1/(1 + exp(-((x[,1] > 0) + (x[,2] < -0.5) - 0.5*(x[,3] > 0 & x[,4] < 0) +
+                          2 * (x[,4] > 0.5 & x[,5] < -0.5) -
+                          2 * (x[,1] > 0.5 & x[,2] < 0.5) + 0.5 * x[,4] - 0.5*x[,5]^2 - 
+                          0.5 * x[,6] * (x[,7]>0) + 0.5*x[,8]  + 0.25 * x[,9] ^ 2 - 0.25 * x[,10] ^ 2)))
+  
+  
+  ## generate treatment assignments
+  a <- rbinom(n, 1, aprob)
+  
+  ## generate response with confounding.
+  ## here the true ATE (treatment effect) is 0
+  
+  y <- 5 * (x[,1]>0) + 5 * (x[,2] < -0.5) - 5*(x[,3] > 0 & x[,4] < 0) + 0.5 * x[,4] - 1*x[,5]^2 + 
+    5 * (x[,4] > 0.5 & x[,5] < -0.5) - 5 * (x[,1] > 0.5 & x[,2] < 0.5) - 
+    5 * x[,6] * (x[,7]>0 + 0.5 * x[,7]) + 0.5*x[,8] + 0.5 * x[,9] ^ 2 - 0.5 * x[,10] ^ 2 + rnorm(n, sd = sqrt(2))
+  fit=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 3)
+  resmat3_f36[i]=fit$ate
+  fit1=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 4)
+  resmat3_f46[i]=fit1$ate
+}
+
+
+resmat4_f36=numeric(50)
+resmat4_f46=numeric(50)
+n=4000
+p=100
+set.seed(12345)
+for( i in 1:50){
+  rho <- -0.25
+  Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
+  
+  x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
+  
+  ## scramble columns of x so that which pairs of columns
+  ## are correlated is at random
+  x <- x[,sample.int(p, p, replace = FALSE)]
+  
+  ## true propensity scores..
+  ## have to make sure the probabilities are not too close to 0 or 1 or else positivity will not hold!
+  aprob <- 1/(1 + exp(-.25*(apply(x[,c(c(1:10),c(21:30))],1,sum))))
+  
+  ## generate treatment assignments
+  a <- rbinom(n, 1, aprob)
+  
+  ## generate response with confounding.
+  ## here the true ATE (treatment effect) is 0
+  
+  y <- apply(x[,1:20],1,sum) + rnorm(n, sd = sqrt(2))
+  fit=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 3)
+  resmat4_f36[i]=fit$ate
+  fit1=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 4)
+  resmat4_f46[i]=fit1$ate
+}
+
+
 res_mat=read.table("resmat21",header=T)
 res_mat=res_mat[,-1]
 res_mat=cbind(res_mat,resmat2_f31,resmat2_f41)
@@ -1850,178 +2025,6 @@ g6=res_mat %>% as.data.frame() %>%
   (g3 + g4) /
   (g5 + g6)
 
-
-resmat2_f31=numeric(50)
-resmat2_f41=numeric(50)
-n=1000
-p=10
-set.seed(12345)
-for( i in 1:50){
-  rho <- -0.25
-  Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
-  
-  x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
-  
-  ## scramble columns of x so that which pairs of columns
-  ## are correlated is at random
-  x <- x[,sample.int(p, p, replace = FALSE)]
-  
-  ## true propensity scores..
-  ## have to make sure the probabilities are not too close to 0 or 1 or else positivity will not hold!
-  aprob <- .25*(1+dbeta(x[,1],2,4))
-  
-  ## generate treatment assignments
-  a <- rbinom(n, 1, aprob)
-  
-  ## generate response with confounding.
-  ## here the true ATE (treatment effect) is 0
-  
-  y <- 2*(x[,1]-1)+.5*(2*a-1)*(1+1/(1+exp(-20*(x[,1]-1/3))))*(1+1/(1+exp(-20*(x[,2]-1/3))))+rnorm(n)
-  fit=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 3)
-  resmat2_f31[i]=fit$ate
-  fit1=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 4)
-  resmat2_f41[i]=fit1$ate
-}
-
-
-resmat2_f32=numeric(50)
-resmat2_f42=numeric(50)
-n=1000
-p=100
-set.seed(12345)
-for( i in 1:50){
-  rho <- -0.25
-  Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
-  
-  x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
-  
-  ## scramble columns of x so that which pairs of columns
-  ## are correlated is at random
-  x <- x[,sample.int(p, p, replace = FALSE)]
-  
-  ## true propensity scores..
-  ## have to make sure the probabilities are not too close to 0 or 1 or else positivity will not hold!
-  aprob <- .25*(1+dbeta(x[,1],2,4))
-  
-  ## generate treatment assignments
-  a <- rbinom(n, 1, aprob)
-  
-  ## generate response with confounding.
-  ## here the true ATE (treatment effect) is 0
-  
-  y <- 2*(x[,1]-1)+.5*(2*a-1)*(1+1/(1+exp(-20*(x[,1]-1/3))))*(1+1/(1+exp(-20*(x[,2]-1/3))))+rnorm(n)
-  fit=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 3)
-  resmat2_f32[i]=fit$ate
-  fit1=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 4)
-  resmat2_f42[i]=fit1$ate
-}
-
-
-resmat2_f36=numeric(50)
-resmat2_f46=numeric(50)
-n=4000
-p=100
-set.seed(12345)
-for( i in 1:50){
-  rho <- -0.25
-  Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
-  
-  x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
-  
-  ## scramble columns of x so that which pairs of columns
-  ## are correlated is at random
-  x <- x[,sample.int(p, p, replace = FALSE)]
-  
-  ## true propensity scores..
-  ## have to make sure the probabilities are not too close to 0 or 1 or else positivity will not hold!
-  aprob <- .25*(1+dbeta(x[,1],2,4))
-  
-  ## generate treatment assignments
-  a <- rbinom(n, 1, aprob)
-  
-  ## generate response with confounding.
-  ## here the true ATE (treatment effect) is 0
-  
-  y <- 2*(x[,1]-1)+.5*(2*a-1)*(1+1/(1+exp(-20*(x[,1]-1/3))))*(1+1/(1+exp(-20*(x[,2]-1/3))))+rnorm(n)
-  fit=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 3)
-  resmat2_f36[i]=fit$ate
-  fit1=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 4)
-  resmat2_f46[i]=fit1$ate
-}
-
-
-
-
-resmat3_f36=numeric(50)
-resmat3_f46=numeric(50)
-n=4000
-p=100
-set.seed(12345)
-for( i in 1:50){
-  rho <- -0.25
-  Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
-  
-  x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
-  
-  ## scramble columns of x so that which pairs of columns
-  ## are correlated is at random
-  x <- x[,sample.int(p, p, replace = FALSE)]
-  
-  ## true propensity scores..
-  ## have to make sure the probabilities are not too close to 0 or 1 or else positivity will not hold!
-  aprob <- 1/(1 + exp(-((x[,1] > 0) + (x[,2] < -0.5) - 0.5*(x[,3] > 0 & x[,4] < 0) +
-                          2 * (x[,4] > 0.5 & x[,5] < -0.5) -
-                          2 * (x[,1] > 0.5 & x[,2] < 0.5) + 0.5 * x[,4] - 0.5*x[,5]^2 - 
-                          0.5 * x[,6] * (x[,7]>0) + 0.5*x[,8]  + 0.25 * x[,9] ^ 2 - 0.25 * x[,10] ^ 2)))
-  
-  
-  ## generate treatment assignments
-  a <- rbinom(n, 1, aprob)
-  
-  ## generate response with confounding.
-  ## here the true ATE (treatment effect) is 0
-  
-  y <- 5 * (x[,1]>0) + 5 * (x[,2] < -0.5) - 5*(x[,3] > 0 & x[,4] < 0) + 0.5 * x[,4] - 1*x[,5]^2 + 
-    5 * (x[,4] > 0.5 & x[,5] < -0.5) - 5 * (x[,1] > 0.5 & x[,2] < 0.5) - 
-    5 * x[,6] * (x[,7]>0 + 0.5 * x[,7]) + 0.5*x[,8] + 0.5 * x[,9] ^ 2 - 0.5 * x[,10] ^ 2 + rnorm(n, sd = sqrt(2))
-  fit=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 3)
-  resmat3_f36[i]=fit$ate
-  fit1=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 4)
-  resmat3_f46[i]=fit1$ate
-}
-
-
-resmat4_f36=numeric(50)
-resmat4_f46=numeric(50)
-n=4000
-p=100
-set.seed(12345)
-for( i in 1:50){
-  rho <- -0.25
-  Sig <- (rho) ^ abs(outer(1:p, 1:p, FUN = "-"))
-  
-  x <- MASS::mvrnorm(n = n, mu = numeric(p), Sigma = Sig)
-  
-  ## scramble columns of x so that which pairs of columns
-  ## are correlated is at random
-  x <- x[,sample.int(p, p, replace = FALSE)]
-  
-  ## true propensity scores..
-  ## have to make sure the probabilities are not too close to 0 or 1 or else positivity will not hold!
-  aprob <- 1/(1 + exp(-.25*(apply(x[,c(c(1:10),c(21:30))],1,sum))))
-  
-  ## generate treatment assignments
-  a <- rbinom(n, 1, aprob)
-  
-  ## generate response with confounding.
-  ## here the true ATE (treatment effect) is 0
-  
-  y <- apply(x[,1:20],1,sum) + rnorm(n, sd = sqrt(2))
-  fit=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 3)
-  resmat4_f36[i]=fit$ate
-  fit1=forest_balance(x,a,y,cross.fitting = TRUE,num.folds = 4)
-  resmat4_f46[i]=fit1$ate
-}
 
 
 
